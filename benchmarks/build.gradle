@@ -1,0 +1,26 @@
+buildscript {
+    repositories {
+        jcenter()
+    }
+
+    dependencies {
+        classpath "com.github.jengelman.gradle.plugins:shadow:1.2.4"
+    }
+}
+
+apply plugin: "com.github.johnrengelman.shadow"
+
+shadowJar {
+    mergeServiceFiles()
+    manifest {
+        attributes 'Main-Class': 'org.openjdk.jmh.Main'
+    }
+}
+
+description = 'Okio Performance Benchmarks'
+
+dependencies {
+    compile project(':okio')
+    compile 'org.openjdk.jmh:jmh-core:1.4.1'
+    compile 'org.openjdk.jmh:jmh-generator-annprocess:1.4.1'
+}

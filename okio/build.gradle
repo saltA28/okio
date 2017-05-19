@@ -1,0 +1,7 @@
+description = 'Okio'
+
+dependencies {
+    compileOnly 'com.google.code.findbugs:jsr305:3.0.1'
+    compileOnly 'org.codehaus.mojo:animal-sniffer-annotations:1.15'
+    testCompile 'junit:junit:4.12'
+}
