@@ -16,6 +16,7 @@
 package okio;
 
 import java.io.EOFException;
+import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.Charset;
@@ -23,6 +24,7 @@ import java.util.Arrays;
 import java.util.List;
 import org.junit.Before;
 import org.junit.Test;
+import org.junit.rules.TemporaryFolder;
 import org.junit.runner.RunWith;
 import org.junit.runners.Parameterized;
 import org.junit.runners.Parameterized.Parameter;
@@ -96,7 +98,59 @@ public final class BufferedSourceTest {
       }
     };
 
-    Pipe pipe();
+    Factory FILE_STORE = new Factory() {
+      @Override
+      public Pipe pipe() throws IOException {
+        TemporaryFolder folder = new TemporaryFolder();
+        folder.create();
+        File file = folder.newFile();
+        BufferedStore store = Okio.buffer(new StorePipe(Okio.store(file)));
+        Pipe result = new Pipe();
+        result.sink = store;
+        result.source = store;
+        return result;
+      }
+
+      @Override public String toString() {
+        return "FileStore";
+      }
+    };
+
+    Factory DOUBLE_BUFFERED_FILE_STORE = new Factory() {
+      @Override
+      public Pipe pipe() throws IOException {
+        TemporaryFolder folder = new TemporaryFolder();
+        folder.create();
+        File file = folder.newFile();
+        BufferedStore store = Okio.buffer(Okio.buffer(new StorePipe(Okio.store(file))));
+        Pipe result = new Pipe();
+        result.sink = store;
+        result.source = store;
+        return result;
+      }
+
+      @Override public String toString() {
+        return "DoubleBufferedFileStore";
+      }
+    };
+
+    Factory BYTE_ARRAY_STORE = new Factory() {
+      @Override
+      public Pipe pipe() throws IOException {
+        // Segment.SIZE * 128 is long enough
+        BufferedStore store = Okio.buffer(new StorePipe(Okio.store(new byte[Segment.SIZE * 128])));
+        Pipe result = new Pipe();
+        result.sink = store;
+        result.source = store;
+        return result;
+      }
+
+      @Override public String toString() {
+        return "ByteArrayStore";
+      }
+    };
+
+    Pipe pipe() throws IOException;
   }
 
   private static class Pipe {
@@ -104,19 +158,86 @@ public final class BufferedSourceTest {
     BufferedSource source;
   }
 
+  private static class StorePipe implements Store {
+    private Store store;
+    private long readPosition;
+    private long writePosition;
+
+    public StorePipe(Store store) {
+      this.store = store;
+    }
+
+    @Override
+    public void seek(long position) throws IOException {
+      store.seek(position);
+      // Only effect read position, not safe
+      readPosition = position;
+    }
+
+    @Override
+    public long tell() throws IOException {
+      return store.tell();
+    }
+
+    @Override
+    public long size() throws IOException {
+      return store.size();
+    }
+
+    @Override
+    public long read(Buffer sink, long byteCount) throws IOException {
+      store.seek(readPosition);
+      long maxToRead = Math.min(writePosition - readPosition, byteCount);
+      if (maxToRead <= 0) {
+        return -1;
+      }
+      long bytesRead = store.read(sink, maxToRead);
+      if (bytesRead != -1) {
+        readPosition += bytesRead;
+        if (readPosition > writePosition) throw new IOException("readPosition > writePosition");
+      }
+      return bytesRead;
+    }
+
+    @Override
+    public void write(Buffer source, long byteCount) throws IOException {
+      store.seek(writePosition);
+      store.write(source, byteCount);
+      writePosition += byteCount;
+    }
+
+    @Override
+    public void flush() throws IOException {
+      store.flush();
+    }
+
+    @Override
+    public Timeout timeout() {
+      return store.timeout();
+    }
+
+    @Override
+    public void close() throws IOException {
+      store.close();
+    }
+  }
+
   @Parameters(name = "{0}")
   public static List<Object[]> parameters() {
     return Arrays.asList(
         new Object[] { Factory.BUFFER},
         new Object[] { Factory.REAL_BUFFERED_SOURCE},
-        new Object[] { Factory.ONE_BYTE_AT_A_TIME});
+        new Object[] { Factory.ONE_BYTE_AT_A_TIME},
+        new Object[] { Factory.FILE_STORE},
+        new Object[] { Factory.DOUBLE_BUFFERED_FILE_STORE},
+        new Object[] { Factory.BYTE_ARRAY_STORE});
   }
 
   @Parameter public Factory factory;
   private BufferedSink sink;
   private BufferedSource source;
 
-  @Before public void setUp() {
+  @Before public void setUp() throws IOException {
     Pipe pipe = factory.pipe();
     sink = pipe.sink;
     source = pipe.source;
@@ -219,12 +340,26 @@ public final class BufferedSourceTest {
   }
 
   @Test public void readAll() throws IOException {
+    // Store will clear buffer when switch read/write state
+    assumeTrue(factory != Factory.FILE_STORE);
+    assumeTrue(factory != Factory.DOUBLE_BUFFERED_FILE_STORE);
+    assumeTrue(factory != Factory.BYTE_ARRAY_STORE);
+
     source.buffer().writeUtf8("abc");
     sink.writeUtf8("def");
 
     Buffer sink = new Buffer();
     assertEquals(6, source.readAll(sink));
     assertEquals("abcdef", sink.readUtf8());
+    assertTrue(source.exhausted());
+  }
+
+  @Test public void readAll2() throws IOException {
+    sink.writeUtf8("def");
+
+    Buffer sink = new Buffer();
+    assertEquals(3, source.readAll(sink));
+    assertEquals("def", sink.readUtf8());
     assertTrue(source.exhausted());
   }
 

@@ -23,6 +23,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.InterruptedIOException;
 import java.io.OutputStream;
+import java.io.RandomAccessFile;
 import java.net.Socket;
 import java.net.SocketTimeoutException;
 import java.nio.file.Files;
@@ -58,6 +59,15 @@ public final class Okio {
    */
   public static BufferedSink buffer(Sink sink) {
     return new RealBufferedSink(sink);
+  }
+
+  /**
+   * Returns a new store that buffers reads from or writes to {@code store}. The returned store
+   * will perform bulk reads into its in-memory buffer or batch writes to {@code store}.
+   * Use this wherever you read or write a store to get an ergonomic and efficient access to data.
+   */
+  public static BufferedStore buffer(Store store) {
+    return new RealBufferedStore(store);
   }
 
   /** Returns a sink that writes to {@code out}. */
@@ -208,6 +218,164 @@ public final class Okio {
       }
 
       @Override public void close() throws IOException {
+      }
+    };
+  }
+
+  /** Returns a store that reads from and writes to {@code file}. */
+  public static Store store(File file) throws FileNotFoundException {
+    if (file == null) throw new IllegalArgumentException("file == null");
+    return store(new RandomAccessFile(file, "rw"));
+  }
+
+  /** Returns a store that reads from and writes to {@code file}. */
+  public static Store store(RandomAccessFile file) throws FileNotFoundException {
+    if (file == null) throw new IllegalArgumentException("file == null");
+    return store(file, new Timeout());
+  }
+
+  private static Store store(final RandomAccessFile file, final Timeout timeout) throws FileNotFoundException {
+    if (file == null) throw new IllegalArgumentException("file == null");
+    if (timeout == null) throw new IllegalArgumentException("timeout == null");
+
+    return new Store() {
+      @Override public void seek(long position) throws IOException {
+        file.seek(position);
+      }
+
+      @Override public long tell() throws IOException {
+        return file.getFilePointer();
+      }
+
+      @Override public long size() throws IOException {
+        return file.length();
+      }
+
+      @Override public long read(Buffer sink, long byteCount) throws IOException {
+        if (byteCount < 0) throw new IllegalArgumentException("byteCount < 0: " + byteCount);
+        if (byteCount == 0) return 0;
+        timeout.throwIfReached();
+        Segment tail = sink.writableSegment(1);
+        int maxToCopy = (int) Math.min(byteCount, Segment.SIZE - tail.limit);
+        int bytesRead = file.read(tail.data, tail.limit, maxToCopy);
+        if (bytesRead == -1) return -1;
+        tail.limit += bytesRead;
+        sink.size += bytesRead;
+        return bytesRead;
+      }
+
+      @Override public void write(Buffer source, long byteCount) throws IOException {
+        checkOffsetAndCount(source.size, 0, byteCount);
+        while (byteCount > 0) {
+          timeout.throwIfReached();
+          Segment head = source.head;
+          int toCopy = (int) Math.min(byteCount, head.limit - head.pos);
+          file.write(head.data, head.pos, toCopy);
+
+          head.pos += toCopy;
+          byteCount -= toCopy;
+          source.size -= toCopy;
+
+          if (head.pos == head.limit) {
+            source.head = head.pop();
+            SegmentPool.recycle(head);
+          }
+        }
+      }
+
+      @Override public void flush() throws IOException {}
+
+      @Override public void close() throws IOException {
+        file.close();
+      }
+
+      @Override public Timeout timeout() {
+        return timeout;
+      }
+
+      @Override public String toString() {
+        return "store(" + file + ")";
+      }
+    };
+  }
+
+  /** Returns a store that reads from and writes to {@code data}. */
+  public static Store store(byte[] data) throws FileNotFoundException {
+    if (data == null) throw new IllegalArgumentException("file == null");
+    return store(data, new Timeout());
+  }
+
+  private static Store store(final byte[] data, final Timeout timeout) {
+    if (data == null) throw new IllegalArgumentException("data == null");
+    if (timeout == null) throw new IllegalArgumentException("timeout == null");
+
+    return new Store() {
+      private int position;
+
+      @Override public void seek(long position) throws IOException {
+        if (position < 0 || position > data.length) throw new IOException("Out of bounds");
+        this.position = (int) position;
+      }
+
+      @Override public long tell() throws IOException {
+        return position;
+      }
+
+      @Override public long size() throws IOException {
+        return data.length;
+      }
+
+      @Override public long read(Buffer sink, long byteCount) throws IOException {
+        if (byteCount < 0) throw new IllegalArgumentException("byteCount < 0: " + byteCount);
+        if (byteCount == 0) return 0;
+        timeout.throwIfReached();
+        Segment tail = sink.writableSegment(1);
+        int bytesRead = (int) Math.min(data.length - position, Math.min(byteCount, Segment.SIZE - tail.limit));
+        if (bytesRead <= 0) return -1;
+        System.arraycopy(data, position, tail.data, tail.limit, bytesRead);
+        position += bytesRead;
+        tail.limit += bytesRead;
+        sink.size += bytesRead;
+        return bytesRead;
+      }
+
+      @Override public void write(Buffer source, long byteCount) throws IOException {
+        checkOffsetAndCount(source.size, 0, byteCount);
+        boolean eof = false;
+        long remain = data.length - position;
+        if (byteCount > remain) {
+          eof = true;
+          byteCount = remain;
+        }
+        while (byteCount > 0) {
+          timeout.throwIfReached();
+          Segment head = source.head;
+          int toCopy = (int) Math.min(byteCount, head.limit - head.pos);
+          System.arraycopy(head.data, head.pos, data, position, toCopy);
+
+          position += toCopy;
+          head.pos += toCopy;
+          byteCount -= toCopy;
+          source.size -= toCopy;
+
+          if (head.pos == head.limit) {
+            source.head = head.pop();
+            SegmentPool.recycle(head);
+          }
+        }
+        if (eof) throw new IOException("End of data");
+      }
+
+      @Override public void flush() throws IOException {}
+
+      @Override public void close() throws IOException {}
+
+      @Override public Timeout timeout() {
+        return timeout;
+      }
+
+      @Override public String toString() {
+        return "store(" + data + ")";
       }
     };
   }
