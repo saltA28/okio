@@ -328,8 +328,15 @@ final class RealBufferedStore implements BufferedStore {
 
       @Override
       public void close() throws IOException {
-        inputStream.close();
-        RealBufferedStore.this.close();
+        try {
+          switchToRead();
+        } finally {
+          try {
+            inputStream.close();
+          } finally {
+            RealBufferedStore.this.close();
+          }
+        }
       }
 
       @Override
@@ -511,8 +518,15 @@ final class RealBufferedStore implements BufferedStore {
 
       @Override
       public void close() throws IOException {
-        outputStream.close();
-        RealBufferedStore.this.close();
+        try {
+          switchToWrite();
+        } finally {
+          try {
+            outputStream.close();
+          } finally {
+            RealBufferedStore.this.close();
+          }
+        }
       }
 
       @Override
@@ -566,13 +580,21 @@ final class RealBufferedStore implements BufferedStore {
   @Override
   public void close() throws IOException {
     try {
-      store.close();
-    } finally {
-      try {
-        source.close();
-      } finally {
-        sink.close();
+      if (state == STATE_READ) {
+        try {
+          source.close();
+        } finally {
+          sink.close();
+        }
+      } else {
+        try {
+          sink.close();
+        } finally {
+          source.close();
+        }
       }
+    } finally {
+      store.close();
     }
   }
 
