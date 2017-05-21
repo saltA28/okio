@@ -4,6 +4,11 @@ Okio
 Okio is a new library that complements `java.io` and `java.nio` to make it much
 easier to access, store, and process your data.
 
+About this Fork
+---------------
+
+This fork has a new class named `Store` which is described in [this issue][9]. Except for that, the fork and the origin are exactly the same.
+
 ByteStrings and Buffers
 -----------------------
 
@@ -161,4 +166,5 @@ License
  [6]: http://square.github.io/okio/1.x/okio/okio/Sink.html
  [7]: http://square.github.io/okio/1.x/okio/okio/BufferedSource.html
  [8]: http://square.github.io/okio/1.x/okio/okio/BufferedSink.html
+ [9]: https://github.com/square/okio/issues/54
  [snap]: https://oss.sonatype.org/content/repositories/snapshots/
