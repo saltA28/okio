@@ -573,8 +573,7 @@ final class RealBufferedStore implements BufferedStore {
 
   @Override
   public Timeout timeout() {
-    // Not supported
-    return null;
+    return store.timeout();
   }
 
   @Override
