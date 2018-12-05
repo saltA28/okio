@@ -1,14 +1,6 @@
-buildscript {
-    repositories {
-        jcenter()
-    }
-
-    dependencies {
-        classpath "com.github.jengelman.gradle.plugins:shadow:1.2.4"
-    }
+plugins {
+    id "com.github.johnrengelman.shadow" version "4.0.3"
 }
-
-apply plugin: "com.github.johnrengelman.shadow"
 
 shadowJar {
     mergeServiceFiles()
