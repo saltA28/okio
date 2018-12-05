@@ -64,7 +64,8 @@ public final class InflaterSource implements Source {
       // Decompress the inflater's compressed data into the sink.
       try {
         Segment tail = sink.writableSegment(1);
-        int bytesInflated = inflater.inflate(tail.data, tail.limit, Segment.SIZE - tail.limit);
+        int toRead = (int) Math.min(byteCount, Segment.SIZE - tail.limit);
+        int bytesInflated = inflater.inflate(tail.data, tail.limit, toRead);
         if (bytesInflated > 0) {
           tail.limit += bytesInflated;
           sink.size += bytesInflated;
@@ -91,7 +92,7 @@ public final class InflaterSource implements Source {
    * it needs input). Returns true if the inflater required input but the source
    * was exhausted.
    */
-  public boolean refill() throws IOException {
+  public final boolean refill() throws IOException {
     if (!inflater.needsInput()) return false;
 
     releaseInflatedBytes();

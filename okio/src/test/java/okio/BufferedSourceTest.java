@@ -19,6 +19,7 @@ import java.io.EOFException;
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
+import java.nio.ByteBuffer;
 import java.nio.charset.Charset;
 import java.util.Arrays;
 import java.util.List;
@@ -95,6 +96,34 @@ public final class BufferedSourceTest {
 
       @Override public String toString() {
         return "OneByteAtATime";
+      }
+    };
+
+    Factory PEEK_BUFFER = new Factory() {
+      @Override public Pipe pipe() {
+        Buffer buffer = new Buffer();
+        Pipe result = new Pipe();
+        result.sink = buffer;
+        result.source = buffer.peek();
+        return result;
+      }
+
+      @Override public String toString() {
+        return "PeekBuffer";
+      }
+    };
+
+    Factory PEEK_BUFFERED_SOURCE = new Factory() {
+      @Override public Pipe pipe() {
+        Buffer buffer = new Buffer();
+        Pipe result = new Pipe();
+        result.sink = buffer;
+        result.source = Okio.buffer((Source) buffer).peek();
+        return result;
+      }
+
+      @Override public String toString() {
+        return "PeekBufferedSource";
       }
     };
 
@@ -228,6 +257,8 @@ public final class BufferedSourceTest {
         new Object[] { Factory.BUFFER},
         new Object[] { Factory.REAL_BUFFERED_SOURCE},
         new Object[] { Factory.ONE_BYTE_AT_A_TIME},
+        new Object[] { Factory.PEEK_BUFFER },
+        new Object[] { Factory.PEEK_BUFFERED_SOURCE },
         new Object[] { Factory.FILE_STORE},
         new Object[] { Factory.DOUBLE_BUFFERED_FILE_STORE},
         new Object[] { Factory.BYTE_ARRAY_STORE});
@@ -1089,12 +1120,6 @@ public final class BufferedSourceTest {
     assertEquals("ef", source.readUtf8());
   }
 
-  @Test public void selectNoByteStrings() throws IOException {
-    Options options = Options.of();
-    sink.writeUtf8("abc");
-    assertEquals(-1, source.select(options));
-  }
-
   @Test public void selectFromEmptySource() throws IOException {
     Options options = Options.of(
         ByteString.encodeUtf8("abc"),
@@ -1108,15 +1133,109 @@ public final class BufferedSourceTest {
   }
 
   @Test public void selectEmptyByteString() throws IOException {
-    Options options = Options.of(ByteString.of());
-    sink.writeUtf8("abc");
-    assertEquals(0, source.select(options));
-    assertEquals("abc", source.readUtf8());
+    try {
+      Options.of(ByteString.of());
+      fail();
+    } catch (IllegalArgumentException expected) {
+    }
   }
 
-  @Test public void selectEmptyByteStringFromEmptySource() throws IOException {
-    Options options = Options.of(ByteString.of());
-    assertEquals(0, source.select(options));
+  @Test public void peek() throws IOException {
+    sink.writeUtf8("abcdefghi");
+    sink.emit();
+
+    assertEquals("abc", source.readUtf8(3));
+
+    BufferedSource peek = source.peek();
+    assertEquals("def", peek.readUtf8(3));
+    assertEquals("ghi", peek.readUtf8(3));
+    assertFalse(peek.request(1));
+
+    assertEquals("def", source.readUtf8(3));
+  }
+
+  @Test public void peekMultiple() throws IOException {
+    sink.writeUtf8("abcdefghi");
+    sink.emit();
+
+    assertEquals("abc", source.readUtf8(3));
+
+    BufferedSource peek1 = source.peek();
+    BufferedSource peek2 = source.peek();
+
+    assertEquals("def", peek1.readUtf8(3));
+
+    assertEquals("def", peek2.readUtf8(3));
+    assertEquals("ghi", peek2.readUtf8(3));
+    assertFalse(peek2.request(1));
+
+    assertEquals("ghi", peek1.readUtf8(3));
+    assertFalse(peek1.request(1));
+
+    assertEquals("def", source.readUtf8(3));
+  }
+
+  @Test public void peekLarge() throws IOException {
+    sink.writeUtf8("abcdef");
+    sink.writeUtf8(repeat('g', 2 * Segment.SIZE));
+    sink.writeUtf8("hij");
+    sink.emit();
+
+    assertEquals("abc", source.readUtf8(3));
+
+    BufferedSource peek = source.peek();
+    assertEquals("def", peek.readUtf8(3));
+    peek.skip(2 * Segment.SIZE);
+    assertEquals("hij", peek.readUtf8(3));
+    assertFalse(peek.request(1));
+
+    assertEquals("def", source.readUtf8(3));
+    source.skip(2 * Segment.SIZE);
+    assertEquals("hij", source.readUtf8(3));
+  }
+
+  @Test public void peekInvalid() throws IOException {
+    sink.writeUtf8("abcdefghi");
+    sink.emit();
+
+    assertEquals("abc", source.readUtf8(3));
+
+    BufferedSource peek = source.peek();
+    assertEquals("def", peek.readUtf8(3));
+    assertEquals("ghi", peek.readUtf8(3));
+    assertFalse(peek.request(1));
+
+    assertEquals("def", source.readUtf8(3));
+
+    try {
+      peek.readUtf8();
+      fail();
+    } catch (IllegalStateException e) {
+      assertEquals("Peek source is invalid because upstream source was used", e.getMessage());
+    }
+  }
+
+  @Test public void peekSegmentThenInvalid() throws IOException {
+    sink.writeUtf8("abc");
+    sink.writeUtf8(repeat('d', 2 * Segment.SIZE));
+    sink.emit();
+
+    assertEquals("abc", source.readUtf8(3));
+
+    // Peek a little data and skip the rest of the upstream source
+    BufferedSource peek = source.peek();
+    assertEquals("ddd", peek.readUtf8(3));
+    source.readAll(Okio.blackhole());
+
+    // Skip the rest of the buffered data
+    peek.skip(Segment.SIZE - 3);
+
+    try {
+      peek.readByte();
+      fail();
+    } catch (IllegalStateException e) {
+      assertEquals("Peek source is invalid because upstream source was used", e.getMessage());
+    }
   }
 
   @Test public void rangeEquals() throws IOException {
@@ -1155,5 +1274,39 @@ public final class BufferedSourceTest {
     assertFalse(source.rangeEquals(0, ByteString.encodeUtf8("A"), 0, 2));
     // Bytes offset plus byte count longer than bytes length.
     assertFalse(source.rangeEquals(0, ByteString.encodeUtf8("A"), 1, 1));
+  }
+
+  @Test public void readNioBuffer() throws Exception {
+    String expected = factory == Factory.ONE_BYTE_AT_A_TIME ? "a" : "abcdefg";
+    sink.writeUtf8("abcdefg");
+
+    ByteBuffer nioByteBuffer = ByteBuffer.allocate(1024);
+    int byteCount = source.read(nioByteBuffer);
+    assertEquals(expected.length(), byteCount);
+    assertEquals(expected.length(), nioByteBuffer.position());
+    assertEquals(nioByteBuffer.capacity(), nioByteBuffer.limit());
+
+    nioByteBuffer.flip();
+    byte[] data = new byte[expected.length()];
+    nioByteBuffer.get(data);
+    assertEquals(expected, new String(data));
+  }
+
+  @Test public void readLargeNioBufferOnlyReadsOneSegment() throws Exception {
+    String expected = factory == Factory.ONE_BYTE_AT_A_TIME
+        ? "a"
+        : TestUtil.repeat('a', Segment.SIZE);
+    sink.writeUtf8(TestUtil.repeat('a', Segment.SIZE * 4));
+
+    ByteBuffer nioByteBuffer = ByteBuffer.allocate(Segment.SIZE * 3);
+    int byteCount = source.read(nioByteBuffer);
+    assertEquals(expected.length(), byteCount);
+    assertEquals(expected.length(), nioByteBuffer.position());
+    assertEquals(nioByteBuffer.capacity(), nioByteBuffer.limit());
+
+    nioByteBuffer.flip();
+    byte[] data = new byte[expected.length()];
+    nioByteBuffer.get(data);
+    assertEquals(expected, new String(data));
   }
 }

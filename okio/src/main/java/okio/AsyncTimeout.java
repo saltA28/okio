@@ -165,7 +165,7 @@ public class AsyncTimeout extends Timeout {
           // Count how many bytes to write. This loop guarantees we split on a segment boundary.
           long toWrite = 0L;
           for (Segment s = source.head; toWrite < TIMEOUT_WRITE_SIZE; s = s.next) {
-            int segmentSize = source.head.limit - source.head.pos;
+            int segmentSize = s.limit - s.pos;
             toWrite += segmentSize;
             if (toWrite >= byteCount) {
               toWrite = byteCount;
@@ -246,6 +246,7 @@ public class AsyncTimeout extends Timeout {
 
       @Override public void close() throws IOException {
         boolean throwOnTimeout = false;
+        enter();
         try {
           source.close();
           throwOnTimeout = true;

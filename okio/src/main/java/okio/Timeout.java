@@ -142,7 +142,8 @@ public class Timeout {
    */
   public void throwIfReached() throws IOException {
     if (Thread.interrupted()) {
-      throw new InterruptedIOException("thread interrupted");
+      Thread.currentThread().interrupt(); // Retain interrupted status.
+      throw new InterruptedIOException("interrupted");
     }
 
     if (hasDeadline && deadlineNanoTime - System.nanoTime() <= 0) {
@@ -221,6 +222,7 @@ public class Timeout {
         throw new InterruptedIOException("timeout");
       }
     } catch (InterruptedException e) {
+      Thread.currentThread().interrupt(); // Retain interrupted status.
       throw new InterruptedIOException("interrupted");
     }
   }

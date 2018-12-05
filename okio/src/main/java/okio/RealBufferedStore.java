@@ -7,6 +7,7 @@ package okio;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.nio.ByteBuffer;
 import java.nio.charset.Charset;
 import javax.annotation.Nullable;
 
@@ -38,7 +39,7 @@ final class RealBufferedStore implements BufferedStore {
   private void switchToWrite() throws IOException {
     if (state == STATE_READ) {
       // Clear the buffer of the source, seek store back
-      Buffer buffer = source.buffer();
+      Buffer buffer = source.getBuffer();
       if (buffer.size != 0) {
         store.seek(store.tell() - buffer.size);
         buffer.clear();
@@ -188,6 +189,12 @@ final class RealBufferedStore implements BufferedStore {
   }
 
   @Override
+  public int read(ByteBuffer sink) throws IOException {
+    switchToRead();
+    return source.read(sink);
+  }
+
+  @Override
   public void readFully(Buffer sink, long byteCount) throws IOException {
     switchToRead();
     source.readFully(sink, byteCount);
@@ -304,6 +311,33 @@ final class RealBufferedStore implements BufferedStore {
   }
 
   @Override
+  public BufferedSource peek() {
+    try {
+      switchToRead();
+      return source.peek();
+    } catch (IOException e) {
+      return Okio.buffer(new Source() {
+        private Timeout timeout = new Timeout();
+
+        @Override
+        public long read(Buffer sink, long byteCount) throws IOException {
+          throw new IOException("Bad BufferedSource");
+        }
+
+        @Override
+        public Timeout timeout() {
+          return timeout;
+        }
+
+        @Override
+        public void close() throws IOException {
+          throw new IOException("Bad BufferedSource");
+        }
+      });
+    }
+  }
+
+  @Override
   public InputStream inputStream() {
     return new InputStream() {
       private InputStream inputStream = source.inputStream();
@@ -382,6 +416,12 @@ final class RealBufferedStore implements BufferedStore {
   public BufferedSink write(byte[] source, int offset, int byteCount) throws IOException {
     switchToWrite();
     return sink.write(source, offset, byteCount);
+  }
+
+  @Override
+  public int write(ByteBuffer source) throws IOException {
+    switchToWrite();
+    return sink.write(source);
   }
 
   @Override
@@ -543,7 +583,7 @@ final class RealBufferedStore implements BufferedStore {
   @Override
   public void seek(long position) throws IOException {
     if (state == STATE_READ) {
-      source.buffer().clear();
+      source.getBuffer().clear();
     } else {
       sink.emit();
     }
@@ -553,7 +593,7 @@ final class RealBufferedStore implements BufferedStore {
   @Override
   public long tell() throws IOException {
     if (state == STATE_READ) {
-      return store.tell() - source.buffer().size();
+      return store.tell() - source.getBuffer().size();
     } else {
       return store.tell() + sink.buffer().size();
     }
@@ -574,6 +614,11 @@ final class RealBufferedStore implements BufferedStore {
   @Override
   public Timeout timeout() {
     return store.timeout();
+  }
+
+  @Override
+  public boolean isOpen() {
+    return source.isOpen() && sink.isOpen();
   }
 
   @Override
@@ -604,9 +649,14 @@ final class RealBufferedStore implements BufferedStore {
   @Override
   public Buffer buffer() {
     if (state == STATE_READ) {
-      return source.buffer();
+      return source.getBuffer();
     } else {
       return sink.buffer();
     }
+  }
+
+  @Override
+  public Buffer getBuffer() {
+    return buffer();
   }
 }

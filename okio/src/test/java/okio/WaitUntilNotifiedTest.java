@@ -22,9 +22,9 @@ import java.util.concurrent.TimeUnit;
 import org.junit.After;
 import org.junit.Test;
 
-import static org.junit.Assert.fail;
 import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
 
 public final class WaitUntilNotifiedTest {
   final ScheduledExecutorService executorService = Executors.newScheduledThreadPool(0);
@@ -126,9 +126,21 @@ public final class WaitUntilNotifiedTest {
       fail();
     } catch (InterruptedIOException expected) {
       assertEquals("interrupted", expected.getMessage());
-      assertFalse(Thread.interrupted());
+      assertTrue(Thread.interrupted());
     }
     assertElapsed(0.0, start);
+  }
+
+  @Test public synchronized void threadInterruptedOnThrowIfReached() throws Exception {
+    Timeout timeout = new Timeout();
+    Thread.currentThread().interrupt();
+    try {
+      timeout.throwIfReached();
+      fail();
+    } catch (InterruptedIOException expected) {
+      assertEquals("interrupted", expected.getMessage());
+      assertTrue(Thread.interrupted());
+    }
   }
 
   /** Returns the nanotime in milliseconds as a double for measuring timeouts. */
